@@ -1,7 +1,16 @@
 #![allow(warnings)]
+use std::default;
+use rand::distributions::WeightedIndex;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
+use tch::{nn,Tensor,Kind};
+use tch::nn::{Adam,Module,VarStore,OptimizerConfig, Optimizer};
+
+const FC1_DIMS:i64 = 256;
+const FC2_DIMS:i64 = 256;
+
 fn main() {
+    let vs = nn::VarStore::new(tch::Device::Cpu);
 }
 
 struct PPOMemory{
@@ -56,13 +65,31 @@ impl PPOMemory{
     }
 }
 
+#[derive(Debug)]
+struct ActorNetwork{
+    actor:nn::Sequential,
+    optimizer:Optimizer,
+}
 
+impl ActorNetwork{
+    fn new(vs:&VarStore,input_dims:i64,n_actions:i64)->ActorNetwork{
+        let optimizer = Adam::default().build(vs, 1e-3).unwrap();
+        return ActorNetwork{
+            actor:nn::seq()
+                .add(nn::linear(vs.root(),input_dims,FC1_DIMS,Default::default()))
+                .add_fn(|x|x.relu())
+                .add(nn::linear(vs.root(),FC1_DIMS,FC2_DIMS,Default::default()))
+                .add_fn(|x|x.relu())
+                .add(nn::linear(vs.root(),FC2_DIMS,n_actions,Default::default()))
+                .add_fn(|s|s.log_softmax(-1, Kind::Float)),
+                optimizer
+        };
+    }
+}
 
-
-
-
-
-
-
-
-
+impl Module for ActorNetwork{
+    fn forward(&self, xs: &Tensor) -> Tensor {
+       let dist =  self.actor.forward(xs);
+       return dist;
+    }
+}
