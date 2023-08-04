@@ -4,7 +4,8 @@ use rand::distributions::WeightedIndex;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 use tch::{nn,Tensor,Kind};
-use tch::nn::{Adam,Module,VarStore,OptimizerConfig, Optimizer};
+use tch::nn::{Adam,Module,VarStore,OptimizerConfig, Optimizer, Sequential};
+use statrs::distribution::Categorical;
 
 const FC1_DIMS:i64 = 256;
 const FC2_DIMS:i64 = 256;
@@ -67,13 +68,17 @@ impl PPOMemory{
 
 #[derive(Debug)]
 struct ActorNetwork{
+    vs:VarStore,
     actor:nn::Sequential,
     optimizer:Optimizer,
+    checkpoint_file:String,
 }
 
 impl ActorNetwork{
-    fn new(vs:&VarStore,input_dims:i64,n_actions:i64)->ActorNetwork{
-        let optimizer = Adam::default().build(vs, 1e-3).unwrap();
+
+    fn new(vs:VarStore,input_dims:i64,n_actions:i64,checkpoint_file:String)->ActorNetwork{
+        let optimizer = Adam::default().build(&vs, 1e-3).unwrap();
+        let path = vs.root();
         return ActorNetwork{
             actor:nn::seq()
                 .add(nn::linear(vs.root(),input_dims,FC1_DIMS,Default::default()))
@@ -82,14 +87,153 @@ impl ActorNetwork{
                 .add_fn(|x|x.relu())
                 .add(nn::linear(vs.root(),FC2_DIMS,n_actions,Default::default()))
                 .add_fn(|s|s.log_softmax(-1, Kind::Float)),
-                optimizer
+                optimizer,
+                vs,
+                checkpoint_file,
         };
     }
+
+    fn forward(&self, xs: &Tensor) -> Categorical {
+        let dist =  self.actor.forward(xs);
+        let temp:Vec<f64> = dist.try_into().unwrap();
+        let dist = Categorical::new(&temp[..]).unwrap();
+        return dist;
+    }
+
+    fn save_checkpoint(&self){
+        self.vs.save(self.checkpoint_file.clone());
+    }
+    fn load_checkpoint(&mut self){
+        self.vs.load(self.checkpoint_file.clone());
+    }
+
 }
 
 impl Module for ActorNetwork{
     fn forward(&self, xs: &Tensor) -> Tensor {
-       let dist =  self.actor.forward(xs);
-       return dist;
+        self.actor.forward(xs)
     }
 }
+
+struct CriticNetwork{
+    vs:VarStore,
+    checkpoint_file:String,
+    critic:Sequential,
+    optimizer:Optimizer,
+
+}
+impl CriticNetwork{
+    fn new(vs:VarStore,input_dims:i64,alpha:f64)->CriticNetwork{
+        return CriticNetwork { 
+            checkpoint_file: String::from("critic_torch_ppo"),
+            critic: nn::seq()
+                .add(nn::linear(vs.root(), input_dims, FC1_DIMS, Default::default()))
+                .add_fn(|x|x.relu())
+                .add(nn::linear(vs.root(),FC1_DIMS,FC2_DIMS,Default::default()))
+                .add_fn(|x|x.relu())
+                .add(nn::linear(vs.root(),FC2_DIMS,1,Default::default())),
+            optimizer : Adam::default().build(&vs, alpha).unwrap(),
+            vs,
+        };
+    }
+
+    fn forward(&self,x:Tensor)->Tensor{
+        return self.critic.forward(&x);
+    }
+
+    fn save_checkpoint(&self){
+        self.vs.save(self.checkpoint_file.clone());
+    }
+    
+    fn load_checkpoint(&mut self){
+        self.vs.load(self.checkpoint_file.clone());
+    }
+
+}
+
+struct AgentBuilder{
+    gamma:f64,
+    alpha:f64,
+    gae_lambda:f64,
+    policy_clip:f64,
+    batch_size:i64,
+    n_epochs:i64,
+}
+
+
+struct Agent{
+    gamma:f64,
+    alpha:f64,
+    gae_lambda:f64,
+    policy_clip:f64,
+    batch_size:i64,
+    n_epochs:i64,
+}
+
+impl Agent{
+    fn new(n_actions:i64)->AgentBuilder{
+
+        return AgentBuilder {  
+            gamma : 0.99,
+            alpha : 3e-3,
+            gae_lambda : 0.95,
+            policy_clip: 0.2,
+            batch_size:64,
+            n_epochs:10,
+        };
+    }
+}
+
+impl AgentBuilder{
+
+    fn with_gamma(mut self,gamma:f64)->AgentBuilder{
+        self.gamma = gamma;
+        return self;
+    }
+
+    fn with_alpha(mut self,alpha:f64)->AgentBuilder{
+        self.alpha = alpha;
+        return self;
+    }
+
+    fn with_gae_lambda(mut self,gae_lambda:f64)->AgentBuilder{
+        self.gae_lambda = gae_lambda;
+        return self;
+    }
+
+    fn with_policy_clip(mut self,policy_clip:f64)->AgentBuilder{
+        self.policy_clip = policy_clip;
+        return self;
+    }
+    
+    fn with_batch_size(mut self,batch_size:i64)->AgentBuilder{
+        self.batch_size = batch_size;
+        return self;
+    }
+
+    fn with_n_epochs(mut self,n_epochs:i64)->AgentBuilder{
+        self.n_epochs = n_epochs;
+        return self;
+    }
+
+    fn build(self)->Agent{
+        return Agent{
+            gamma : self.gamma,
+            alpha : self.alpha,
+            gae_lambda : self.gae_lambda,
+            policy_clip: self.policy_clip,
+            batch_size: self.batch_size,
+            n_epochs: self.n_epochs,
+            // actor: ActorNetwork::new(vs, input_dims, n_actions, checkpoint_file)
+        };
+    }
+
+}
+
+
+
+
+
+
+
+
