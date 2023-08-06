@@ -76,7 +76,7 @@ struct ActorNetwork{
 
 impl ActorNetwork{
 
-    fn new(vs:VarStore,input_dims:i64,n_actions:i64,checkpoint_file:String)->ActorNetwork{
+    fn new(vs:VarStore,input_dims:i64,n_actions:i64)->ActorNetwork{
         let optimizer = Adam::default().build(&vs, 1e-3).unwrap();
         let path = vs.root();
         return ActorNetwork{
@@ -89,7 +89,7 @@ impl ActorNetwork{
                 .add_fn(|s|s.log_softmax(-1, Kind::Float)),
                 optimizer,
                 vs,
-                checkpoint_file,
+                checkpoint_file:"actor_torch_ppo".to_string(),
         };
     }
 
@@ -152,12 +152,15 @@ impl CriticNetwork{
 }
 
 struct AgentBuilder{
+    vs:VarStore,
     gamma:f64,
     alpha:f64,
     gae_lambda:f64,
     policy_clip:f64,
     batch_size:i64,
     n_epochs:i64,
+    input_dims:i64,
+    n_actions:i64,
 }
 
 
@@ -168,21 +171,12 @@ struct Agent{
     policy_clip:f64,
     batch_size:i64,
     n_epochs:i64,
+    actor:ActorNetwork,
+    critic:CriticNetwork,
+    memory:PPOMemory,
 }
 
-impl Agent{
-    fn new(n_actions:i64)->AgentBuilder{
 
-        return AgentBuilder {  
-            gamma : 0.99,
-            alpha : 3e-3,
-            gae_lambda : 0.95,
-            policy_clip: 0.2,
-            batch_size:64,
-            n_epochs:10,
-        };
-    }
-}
 
 impl AgentBuilder{
 
@@ -217,6 +211,8 @@ impl AgentBuilder{
     }
 
     fn build(self)->Agent{
+        let mut vs_2 = VarStore::new(tch::Device::Cpu);
+        vs_2.copy(&self.vs);
         return Agent{
             gamma : self.gamma,
             alpha : self.alpha,
@@ -224,13 +220,51 @@ impl AgentBuilder{
             policy_clip: self.policy_clip,
             batch_size: self.batch_size,
             n_epochs: self.n_epochs,
-            // actor: ActorNetwork::new(vs, input_dims, n_actions, checkpoint_file)
+            actor: ActorNetwork::new(vs_2, self.input_dims, self.n_actions),
+            critic: CriticNetwork::new(self.vs,self.input_dims,self.alpha),
+            memory: PPOMemory::new(self.batch_size as i32),
         };
     }
 
+
 }
 
+impl Agent{
+    fn new(vs:VarStore,n_actions:i64,input_dims:i64)->AgentBuilder{
 
+        return AgentBuilder {  
+            gamma : 0.99,
+            alpha : 3e-3,
+            gae_lambda : 0.95,
+            policy_clip: 0.2,
+            batch_size:64,
+            n_epochs:10,
+            input_dims,
+             n_actions,
+             vs,
+        };
+    }
+
+    fn remember(&mut self,mut mem: PPOMemory){
+        self.memory.store_memory(&mut mem);
+    }
+
+    fn save_models(&self){
+        println!("... saving models ...");
+        self.actor.save_checkpoint();
+        self.critic.save_checkpoint();
+    }
+
+    fn load_models(&mut self){
+        println!("... loading models ...");
+        self.actor.load_checkpoint();
+        self.critic.load_checkpoint();
+    }
+
+    fn choose_action(&self,observation:Vec<f64>){
+
+    }
+}
 
 
 
